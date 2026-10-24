@@ -1,0 +1,16 @@
+services:
+  mongodb:
+    # 8.2, а не 8: образи 8.3+ не стартують на ядрах Linux 6.19+ (SERVER-121912)
+    image: mongo:8.2
+    restart: always
+    ports:
+      - '${MONGO_PORT}:27017'
+    environment:
+      # Діють лише при першому запуску з порожнім томом
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+    volumes:
+      - cinema-mongo-data:/data/db
+
+volumes:
+  cinema-mongo-data:
