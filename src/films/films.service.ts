@@ -7,9 +7,8 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
-import { CreateFilmDto } from './dto/create-film.dto.js';
-import { FilmDto } from './dto/film.dto.js';
-import { UpdateFilmDto } from './dto/update-film.dto.js';
+import { CreateFilmInput } from './dto/create-film.input.js';
+import { UpdateFilmInput } from './dto/update-film.input.js';
 import { Film, FilmDocument } from './schemas/film.schema.js';
 
 @Injectable()
@@ -22,38 +21,28 @@ export class FilmsService {
     private readonly showingsCore: ShowingsCoreService,
   ) {}
 
-  async create(dto: CreateFilmDto): Promise<FilmDto> {
-    const film = await this.filmModel.create(dto);
-    return FilmDto.fromDocument(film);
+  async create(input: CreateFilmInput): Promise<FilmDocument> {
+    return this.filmModel.create(input);
   }
 
-  async findAll(): Promise<FilmDto[]> {
-    const films = await this.filmModel.find().sort({ _id: 1 });
-    return films.map((film) => FilmDto.fromDocument(film));
+  async findAll(): Promise<FilmDocument[]> {
+    return this.filmModel.find().sort({ _id: 1 });
   }
 
-  async findOne(id: string): Promise<FilmDto> {
-    const film = await this.findById(id);
-    if (film === null) {
-      throw this.notFound(id);
-    }
-    return FilmDto.fromDocument(film);
-  }
-
-  /** Те саме, що findOne, але без винятку — для перевірок в інших модулях. */
+  /** Фільм або null: query film повертає null для неіснуючого id, а не помилку. */
   async findById(id: string): Promise<FilmDocument | null> {
     return this.filmModel.findById(id);
   }
 
-  async update(id: string, dto: UpdateFilmDto): Promise<FilmDto> {
-    const film = await this.filmModel.findByIdAndUpdate(id, dto, {
+  async update(id: string, input: UpdateFilmInput): Promise<FilmDocument> {
+    const film = await this.filmModel.findByIdAndUpdate(id, input, {
       returnDocument: 'after',
       runValidators: true, // для оновлень валідатори схеми за замовчуванням вимкнені
     });
     if (film === null) {
       throw this.notFound(id);
     }
-    return FilmDto.fromDocument(film);
+    return film;
   }
 
   async remove(id: string): Promise<void> {

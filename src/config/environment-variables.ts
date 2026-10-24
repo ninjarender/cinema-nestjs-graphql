@@ -1,5 +1,6 @@
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsOptional,
@@ -24,6 +25,17 @@ export class EnvironmentVariables {
     message: 'MONGODB_URI must start with mongodb:// or mongodb+srv://',
   })
   MONGODB_URI: string;
+
+  // true — Mongoose пише в консоль кожен запит до бази (перевірка N+1).
+  // Неявне приведення робить з рядка 'false' значення true ще до @Transform,
+  // тому читаємо сире значення з obj і порівнюємо явно.
+  @IsOptional()
+  @Transform(({ obj, key }: { obj: Record<string, unknown>; key: string }) => {
+    const raw = obj[key];
+    return typeof raw === 'string' ? raw.trim().toLowerCase() === 'true' : raw;
+  })
+  @IsBoolean()
+  MONGOOSE_DEBUG: boolean = false;
 }
 
 export function validate(

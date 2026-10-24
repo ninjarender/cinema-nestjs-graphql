@@ -1,21 +1,30 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, QueryFilter } from 'mongoose';
 import { FilmsService } from '../films/films.service.js';
 import { listHallSeats } from '../halls/hall-seats.js';
 import { HallsService } from '../halls/halls.service.js';
-import { CreateShowingDto } from './dto/create-showing.dto.js';
-import { FindShowingsQueryDto } from './dto/find-showings-query.dto.js';
-import { PaginatedShowingsDto } from './dto/paginated-showings.dto.js';
-import { ShowingDto } from './dto/showing.dto.js';
-import { PopulatedShowing, ShowingView } from './dto/showing-view.dto.js';
-import { Showing } from './schemas/showing.schema.js';
-import { ShowingsCoreService } from './showings-core.service.js';
+import { CreateShowingInput } from './dto/create-showing.input.js';
+import { ShowingsArgs } from './dto/showings.args.js';
+import { ShowingPage } from './models/showing-page.model.js';
+import { PopulatedShowing, Showing } from './schemas/showing.schema.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-/** Поля сеансу для відповідей: масиви seats і bookings не читаємо взагалі. */
-const SUMMARY_FIELDS = '-seats -bookings';
 
+/** Шляхи для populate: Showing.film і Showing.hall клієнт отримує об'єктами. */
+type PopulatedPaths = Pick<PopulatedShowing, 'film' | 'hall'>;
+const POPULATE_PATHS = ['film', 'hall'];
+
+/**
+ * N+1 розв'язано через populate: на сторінку сеансів Mongoose робить один запит
+ * до showings і по одному з $in до films і halls, а резолвери полів film/hall
+ * повертають уже підставлені документи без звернення до бази.
+ */
 @Injectable()
 export class ShowingsService {
   private readonly logger = new Logger(ShowingsService.name);
@@ -23,36 +32,35 @@ export class ShowingsService {
   constructor(
     @InjectModel(Showing.name)
     private readonly showingModel: Model<Showing>,
-    private readonly showingsCore: ShowingsCoreService,
     private readonly filmsService: FilmsService,
     private readonly hallsService: HallsService,
   ) {}
 
-  async create(dto: CreateShowingDto): Promise<ShowingDto> {
-    if ((await this.filmsService.findById(dto.filmId)) === null) {
+  async create(input: CreateShowingInput): Promise<PopulatedShowing> {
+    const film = await this.filmsService.findById(input.filmId);
+    if (film === null) {
       this.logger.warn(
-        `Спроба створити сеанс для неіснуючого фільму ${dto.filmId}`,
+        `Спроба створити сеанс для неіснуючого фільму ${input.filmId}`,
       );
-      throw new BadRequestException(`Фільм з id ${dto.filmId} не знайдено`);
+      throw new NotFoundException(`Фільм з id ${input.filmId} не знайдено`);
     }
-    const hall = await this.hallsService.findById(dto.hallId);
+    const hall = await this.hallsService.findById(input.hallId);
     if (hall === null) {
       this.logger.warn(
-        `Спроба створити сеанс у неіснуючому залі ${dto.hallId}`,
+        `Спроба створити сеанс у неіснуючому залі ${input.hallId}`,
       );
-      throw new BadRequestException(`Зал з id ${dto.hallId} не знайдено`);
+      throw new NotFoundException(`Зал з id ${input.hallId} не знайдено`);
     }
 
-    const startsAt = new Date(dto.startsAt);
-    if (startsAt.getTime() <= Date.now()) {
+    if (input.startsAt.getTime() <= Date.now()) {
       throw new BadRequestException('startsAt вказує на момент у минулому');
     }
 
     const showing = await this.showingModel.create({
-      film: dto.filmId,
-      hall: dto.hallId,
-      startsAt,
-      price: dto.price,
+      film: film._id,
+      hall: hall._id,
+      startsAt: input.startsAt,
+      price: input.price,
       // Місця залу розгортаються в документ сеансу: 3 × 5 → 15 вільних місць
       seats: listHallSeats(hall).map(({ row, seat }) => ({
         row,
@@ -61,12 +69,13 @@ export class ShowingsService {
       })),
       bookings: [],
     });
-    return ShowingDto.fromDocument(showing);
+    // Фільм і зал уже прочитані: підставляємо їх у ref-поля без повторного запиту (ручний populate)
+    return Object.assign(showing, { film, hall }) as PopulatedShowing;
   }
 
   /** Фільтрація, сортування й сторінка — запитом до бази, total — countDocuments. */
-  async findAll(query: FindShowingsQueryDto): Promise<PaginatedShowingsDto> {
-    const { filmId, date, page, limit, sort } = query;
+  async findAll(args: ShowingsArgs): Promise<ShowingPage> {
+    const { filmId, date, page, limit, sort } = args;
 
     const filter: QueryFilter<Showing> = {};
     if (filmId !== undefined) {
@@ -79,33 +88,23 @@ export class ShowingsService {
       filter.startsAt = { $gte: dayStart, $lt: dayEnd };
     }
 
-    const [showings, total] = await Promise.all([
+    const [items, total] = await Promise.all([
       this.showingModel
-        .find(filter, SUMMARY_FIELDS)
+        .find(filter)
         .sort({ startsAt: sort, _id: 'asc' }) // при однаковому часі — сталий порядок за _id
         .skip((page - 1) * limit)
         .limit(limit)
-        .populate<Pick<PopulatedShowing, 'film'>>('film', 'title')
-        .populate<Pick<PopulatedShowing, 'hall'>>('hall', 'name'),
+        .populate<PopulatedPaths>(POPULATE_PATHS),
       this.showingModel.countDocuments(filter),
     ]);
 
-    return {
-      items: showings.map((showing) => ShowingView.fromDocument(showing)),
-      total,
-      page,
-      limit,
-    };
+    return { items, total, page, limit };
   }
 
-  async findOne(id: string): Promise<ShowingView> {
-    const showing = await this.showingModel
-      .findById(id, SUMMARY_FIELDS)
-      .populate<Pick<PopulatedShowing, 'film'>>('film', 'title')
-      .populate<Pick<PopulatedShowing, 'hall'>>('hall', 'name');
-    if (showing === null) {
-      throw this.showingsCore.notFound(id);
-    }
-    return ShowingView.fromDocument(showing);
+  /** Сеанс або null: query showing повертає null для неіснуючого id, а не помилку. */
+  async findById(id: string): Promise<PopulatedShowing | null> {
+    return this.showingModel
+      .findById(id)
+      .populate<PopulatedPaths>(POPULATE_PATHS);
   }
 }

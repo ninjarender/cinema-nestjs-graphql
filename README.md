@@ -1,8 +1,9 @@
-# Cinema API (MongoDB)
+# Cinema GraphQL API (MongoDB)
 
-REST API кінотеатру на NestJS: фільми, зали, сеанси й бронювання місць.
-Дані зберігаються в **MongoDB** (Mongoose). Це документна гілка проєкту: поведінка маршрутів та сама, що в ДЗ_2 на PostgreSQL,
-змінилися зберігання даних і спосіб не допустити подвійного бронювання.
+GraphQL API кінотеатру на NestJS: фільми, зали, сеанси й бронювання місць.
+Це той самий сервіс, що й у ДЗ_3 на **MongoDB** (Mongoose): дані, бізнес-правила й механізм бронювання не змінилися.
+Змінився лише шар доступу. Замість REST-маршрутів працює **одна адреса GraphQL**, і клієнт сам обирає потрібні поля.
+REST-контролери та Swagger видалено.
 
 ## Запуск
 
@@ -25,7 +26,12 @@ npm run seed
 npm run start:dev
 ```
 
-Застосунок стартує на `http://localhost:3000`, документація Swagger — на [`http://localhost:3000/docs`](http://localhost:3000/docs).
+### GraphQL-ендпоінт
+
+**`http://localhost:3000/graphql`** (порт задає `PORT`). Усі операції йдуть `POST`-запитом на цю адресу.
+Якщо відкрити її в браузері, з'явиться GraphiQL: редактор запитів з автодоповненням за схемою.
+Поза режимом `NODE_ENV=production` він увімкнений за замовчуванням.
+
 Міграцій немає: структуру документів задають схеми Mongoose, колекції й індекси створюються під час першого запису.
 Якщо `MONGODB_URI` відсутня або не схожа на рядок підключення MongoDB, застосунок **не стартує** (валідація `EnvironmentVariables`).
 
@@ -44,6 +50,9 @@ MONGO_ROOT_PASSWORD=cinema
 
 # Рядок підключення застосунку: cinema — робоча база, authSource=admin — база, де створено кореневого користувача
 MONGODB_URI=mongodb://cinema:cinema@localhost:27017/cinema?authSource=admin
+
+# (необов'язково) true — Mongoose пише в консоль кожен запит до бази; за замовчуванням false
+MONGOOSE_DEBUG=false
 ```
 
 Якщо змінити `MONGO_ROOT_*` після першого запуску, користувача не буде перестворено. Тоді потрібен `docker compose down -v`.
@@ -74,10 +83,221 @@ npm run seed
 а запис іде upsert-ом за `_id` з `$setOnInsert`, тому наявні документи не змінюються. Версія faker у `package.json` закріплена точно,
 бо інша версія з тим самим `seed` генерує інші дані.
 
+## Приклад: сторінка сеансів з назвами фільмів
+
+```graphql
+query ShowingsPage($filmId: ID, $date: String, $page: Int, $limit: Int, $sort: SortOrder) {
+  showings(filmId: $filmId, date: $date, page: $page, limit: $limit, sort: $sort) {
+    total
+    page
+    limit
+    items {
+      id
+      startsAt
+      price
+      film { title durationMinutes }
+      hall { name }
+    }
+  }
+}
+```
+
+```json
+{ "page": 1, "limit": 5, "sort": "ASC" }
+```
+
+Те саме з терміналу:
+
+```bash
+curl -s http://localhost:3000/graphql \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"{ showings(limit: 2) { total page limit items { id startsAt price film { title } hall { name } } } }"}'
+```
+
+Відповідь на засіяних даних (`limit: 2`):
+
+```json
+{
+  "data": {
+    "showings": {
+      "total": 8,
+      "page": 1,
+      "limit": 2,
+      "items": [
+        {
+          "id": "9d487ac03fabe6bdc8ded4c5",
+          "startsAt": "2026-10-25T19:00:00.000Z",
+          "price": 21900,
+          "film": { "title": "To Kill a Mockingbird" },
+          "hall": { "name": "Зал «Миколаїв»" }
+        },
+        {
+          "id": "cddd4a4819d33c0eb9a42c27",
+          "startsAt": "2026-10-26T19:00:00.000Z",
+          "price": 14500,
+          "film": { "title": "The Way We Live Now" },
+          "hall": { "name": "Зал «Павлоград»" }
+        }
+      ]
+    }
+  }
+}
+```
+
+Інші приклади:
+
+```graphql
+# Місця сеансу з ознакою зайнятості та його бронювання
+query Showing($id: ID!) {
+  showing(id: $id) {
+    film { title }
+    seats { row seat isBooked }
+    bookings { id totalPrice seats { row seat } }
+  }
+}
+
+# Бронювання: усі місця одним оновленням або CONFLICT
+mutation Book($showingId: ID!) {
+  createBooking(showingId: $showingId, seats: [{ row: 1, seat: 4 }, { row: 1, seat: 5 }]) {
+    id
+    showingId
+    totalPrice
+    createdAt
+  }
+}
+```
+
+## Схема (code-first)
+
+Схему не пишемо вручну. Класи з декораторами `@ObjectType`/`@Field`, `@InputType`, `@ArgsType` описують типи,
+і NestJS при старті генерує з них SDL у файл **[`src/schema.gql`](src/schema.gql)**. Шлях задано в конфігурації:
+`GraphQLModule.forRoot<ApolloDriverConfig>({ driver: ApolloDriver, autoSchemaFile: join(process.cwd(), 'src/schema.gql'), sortSchema: true })`.
+Файл закомічено, тож схему видно без запуску. Після зміни типів він перегенеровується під час `npm run start:dev` або `npm run test:e2e`.
+
+- **Об'єктні типи — ті самі класи, що й схеми Mongoose** (`Film`, `Hall`, `Showing`, `Seat`, `BookedSeat`): на одному класі
+  стоять `@Schema`/`@Prop` і `@ObjectType`/`@Field`, як `@ApiProperty` раніше.
+  `_id` віддається полем `id` рядком: `@Field(() => ID, { name: 'id' }) _id: Types.ObjectId`.
+- **Обов'язковість відповідає моделі.** Поля без `nullable` дають `!`. `nullable: true` стоїть лише там, де значення справді може бути відсутнім:
+  `film`/`hall`/`showing` (повертають `null` для неіснуючого id), аргументи `showings` і поля `UpdateFilmInput`.
+- **Поля, яких немає в документі в потрібній формі, обчислюють резолвери полів (`@ResolveField`):**
+  - `Showing.film`, `Showing.hall`: у документі це `ObjectId`, а клієнт отримує об'єкт;
+  - `Seat.isBooked`: у документі зберігається `bookingId` (`null` — вільне);
+  - `Showing.bookings`: вкладене бронювання не містить id свого сеансу, тож резолвер у модулі бронювань додає `showingId`.
+    Тип `Booking` — це клас `BookingView`, що успадковує поля абстрактного GraphQL-класу схеми `Booking`.
+- `Hall` не має поля `seats`, бо зайнятість має сенс лише в межах сеансу (`Showing.seats`).
+- Аргументи `showings` описує клас `ShowingsArgs` з `@ArgsType` (`@Args() args: ShowingsArgs`), а не окремі скаляри.
+  Так само зроблено `createBooking(showingId, seats)`: клас `CreateBookingArgs` дає ті самі два аргументи, і class-validator перевіряє масив.
+- `enum SortOrder { ASC, DESC }` зареєстровано через `registerEnumType`. У коді значення — `'asc'`/`'desc'`, які приймає `sort()` Mongoose.
+- `DateTime` — власний скаляр (`common/scalars/date-time.scalar.ts`, `@Scalar('DateTime', () => Date)`) для полів типу `Date`.
+  Вбудований у `@nestjs/graphql` робить `new Date(value)` з будь-чого (`"12/25/2030"`, число мілісекунд), тож його замінено:
+  приймається лише рядок ISO 8601, як у DTO ДЗ_3, інакше `BAD_USER_INPUT`. У відповідях — ISO 8601 в UTC. Ціни — `Int`, у копійках.
+
+## Як розв'язано N+1: `populate` у запиті списку
+
+Резолвер поля `Showing.film` викликається на кожен сеанс. Якби він ходив у базу, сторінка з 20 сеансів дала б 1 + 20 + 20 запитів.
+
+Обрано **`populate` у сервісі** (`ShowingsService.findAll`):
+
+```ts
+this.showingModel
+  .find(filter)
+  .sort({ startsAt: sort, _id: 'asc' })
+  .skip((page - 1) * limit)
+  .limit(limit)
+  .populate(['film', 'hall']);
+```
+
+Mongoose збирає `film` і `hall` усіх сеансів сторінки й робить **по одному запиту `$in`** до `films` і `halls`.
+Резолвери полів `film`/`hall` лише повертають уже підставлені документи й до бази не звертаються.
+Сторінка будь-якого розміру — це завжди 4 запити: `showings.find`, `showings.countDocuments`, `films.find`, `halls.find`.
+`showing(id)` так само робить `populate`. `createShowing` підставляє фільм і зал, які вже прочитав для перевірки існування, без повторного запиту.
+
+**Чому `populate`, а не DataLoader:**
+
+- зв'язків лише два (`film`, `hall`), і обидва — посилання на інші колекції, а `populate` — штатний механізм Mongoose саме для цього (тема 8);
+- `GraphQLModule.forRoot` лишається статичним: DataLoader треба створювати **на кожен запит** (через `context`),
+  щоб кеш не ділився між клієнтами, а це окремий фабричний провайдер або request-scoped сервіси;
+- ціна відома: `populate` виконується, навіть якщо клієнт не запитував `film`/`hall`. На сторінці до 100 сеансів це
+  два легкі запити за `_id`. Якби зв'язків було багато або їх рідко запитували, DataLoader був би кращим вибором.
+
+**Перевірка.** `MONGOOSE_DEBUG=true` у `.env` вмикає лог Mongoose (`connection.set('debug', true)`). На запит сторінки сеансів
+з `film { title } hall { name }` у консолі видно рівно один `films.find({ _id: { $in: [...] } })` і один `halls.find(...)`:
+
+```
+Mongoose: showings.find({}, { sort: { startsAt: 1, _id: 1 }, skip: 0, limit: 2 })
+Mongoose: showings.countDocuments({}, {})
+Mongoose: films.find({ _id: { '$in': [ ObjectId("e685f1bf5f3e3fb2b6c245fc"), ObjectId("fdb7e2caeec57ed4cabd7baf") ] }}, {})
+Mongoose: halls.find({ _id: { '$in': [ ObjectId("50a8803dbbb426bc4cef9833"), ObjectId("c6c5ef2cb1d9938e945ec5e1") ] }}, {})
+```
+
+Те саме перевіряє e2e-тест `resolves film and hall of a page without a query per showing (N+1)`:
+він підключає функцію до того самого debug-логу й рахує запити за колекціями.
+
+## Помилки
+
+GraphQL відповідає HTTP 200 і кладе помилку в масив `errors`. Клієнт розрізняє випадки за **`errors[0].extensions.code`**:
+
+```json
+{
+  "errors": [
+    {
+      "message": "Місця вже заброньовані на цьому сеансі: ряд 1 місце 5",
+      "path": ["createBooking"],
+      "extensions": { "code": "CONFLICT" }
+    }
+  ],
+  "data": null
+}
+```
+
+| Ситуація | Результат |
+|---|---|
+| `film` / `hall` / `showing` з неіснуючим id | `null` без помилки |
+| мутація над неіснуючим документом; `createShowing` з неіснуючим фільмом/залом; `createBooking` на неіснуючий сеанс | `NOT_FOUND` |
+| порушення валідації вхідних даних (class-validator) | `BAD_USER_INPUT` |
+| id не у форматі ObjectId | `BAD_USER_INPUT` (до звернення до бази) |
+| `startsAt` у минулому, `price` не ціле додатне, місце поза залом, повтор місця, порожній масив місць | `BAD_USER_INPUT` |
+| зайняте місце при бронюванні (не бронюється жодне) | `CONFLICT` |
+| видалення фільму/залу, на який посилаються сеанси | `CONFLICT` |
+| зал з наявною назвою (без урахування регістру) | `CONFLICT` |
+| помилка бази даних чи інший збій | `INTERNAL_SERVER_ERROR` з текстом `Internal server error`, деталі лише в логах сервера |
+| синтаксис запиту, неіснуюче поле, неправильний тип змінної | помилки самого GraphQL: `GRAPHQL_PARSE_FAILED`, `GRAPHQL_VALIDATION_FAILED`, `BAD_USER_INPUT` |
+
+Як це влаштовано:
+
+- **Сервіси не змінилися.** Як і в REST-версії, вони кидають винятки Nest: `NotFoundException`, `ConflictException`, `BadRequestException`.
+  Єдина зміна стосується `createShowing`: неіснуючий фільм чи зал тепер дає `NotFoundException`, як вимагає ДЗ, а не `400`.
+- **`GraphqlExceptionFilter`** (`APP_FILTER`, замість HTTP-фільтра з REST-версії) перетворює винятки на `GraphQLError` з кодом:
+  400 → `BAD_USER_INPUT`, 404 → `NOT_FOUND`, 409 → `CONFLICT` (401/403 → `UNAUTHENTICATED`/`FORBIDDEN`, інші 4xx → `BAD_REQUEST`).
+  Будь-яку іншу помилку він пише в лог зі стеком,
+  а клієнт отримує `INTERNAL_SERVER_ERROR` без деталей. Стандартне перетворення Nest тут не годиться:
+  404 і 409 воно віддало б як `INTERNAL_SERVER_ERROR`, а 400 — як `BAD_REQUEST`.
+  Фільтр глобальний, тому звичайні HTTP-запити поза GraphQL (`GET /` → 404, битий JSON у тілі → 400) він передає
+  стандартному обробнику Nest (`BaseExceptionFilter`), і ті отримують звичайну HTTP-відповідь.
+- **`formatError`** (`formatGraphqlError`) — друга межа. Фільтри Nest не діють на резолвери полів (`@ResolveField`) і на помилки
+  виконання самого GraphQL, наприклад `null` у полі з `!`. Усе, що дійшло до відповіді з кодом `INTERNAL_SERVER_ERROR`,
+  отримує загальний текст, а оригінал іде в лог. `includeStacktraceInErrorResponses: false` прибирає стек з відповіді.
+
+## Валідація
+
+- Вхідні типи (`CreateFilmInput`, `UpdateFilmInput`, `CreateHallInput`, `CreateShowingInput`, `SeatInput`) і класи аргументів
+  (`ShowingsArgs`, `CreateBookingArgs`) перевіряє **class-validator**. Правила перенесено з DTO ДЗ_3 без змін.
+- `ValidationPipe` зареєстрований глобально (`APP_PIPE` в `AppModule`) і діє на `@Args()` резолверів так само, як на `@Body()` контролерів.
+  - ⚠️ Pipes діють і на `@Parent()` резолверів полів, тому батьківський об'єкт типізовано аліасом типу (`PopulatedShowing`, `ShowingDocument`),
+    а не класом. З класом у метаданих `ValidationPipe` спробував би перетворити документ Mongoose.
+- **Формат id** перевіряється **до звернення до бази**, бо скаляр `ID` приймає будь-який рядок. Для аргументів `id`
+  це робить `ParseObjectIdPipe` (`@Args('id', { type: () => ID }, ParseObjectIdPipe)`), для `filmId`/`hallId`/`showingId` у вхідних типах — `@IsMongoId`.
+  Без цього Mongoose кинув би `CastError`.
+- **Унікальність пар `row`/`seat`** перевіряє `@ArrayUnique` у `CreateBookingArgs` до звернення до бази.
+- `UpdateFilmInput` = `PartialType(CreateFilmInput, { skipNullProperties: false })` з `@nestjs/graphql`. Пропущене поле не змінюється,
+  а явний `null` перевіряється тими самими правилами й дає `BAD_USER_INPUT`, до бази він не доходить.
+- Аргументи `page`/`limit`/`sort` мають значення за замовчуванням у схемі (`1`, `20`, `ASC`). Явний `null` у будь-якому аргументі `showings`
+  (зокрема `filmId`, `date`) трактується так само, як пропущений аргумент.
+
 ## Чому місця й бронювання зберігаються всередині документа сеансу
 
-Колекцій три: `films`, `halls`, `showings`. Окремих колекцій `bookings` і `booking_seats` немає.
-Документ сеансу містить масив своїх місць `seats` і масив своїх бронювань `bookings`.
+Модель даних не змінилася з ДЗ_3. Колекцій три: `films`, `halls`, `showings`. Документ сеансу містить масив своїх місць `seats`
+і масив своїх бронювань `bookings`.
 
 ```js
 {
@@ -86,7 +306,7 @@ npm run seed
   hall: ObjectId('…'),            // посилання на halls → populate('hall')
   startsAt: ISODate('2026-11-20T18:30:00Z'),
   price: 12500,                   // копійки
-  seats: [                        // розгортаються з rows × seatsPerRow під час створення сеансу
+  seats: [                        // розгортаються з rows × seatsPerRow під час createShowing
     { row: 1, seat: 1, bookingId: null },              // null — вільне
     { row: 1, seat: 4, bookingId: ObjectId('b1') },    // зайняте бронюванням b1
     …
@@ -97,112 +317,43 @@ npm run seed
 }
 ```
 
-- **Неподільність без транзакцій.** Бронювання складається з двох дій: позначити місця зайнятими і зберегти запис бронювання.
-  У PostgreSQL це робила одна транзакція. У MongoDB оновлення **одного документа** неподільне саме по собі,
-  а зміна кількох документів потребувала б транзакції, яка працює лише на replica set.
-  Коли місця й бронювання лежать в одному документі сеансу, обидві дії виконуються **одним `updateOne`**, і транзакція не потрібна.
-- **Перевірка й запис в одному запиті.** Умова оновлення вимагає, щоб **кожне** місце було вільним (`$elemMatch` з `bookingId: null` на кожне місце).
-  Якщо хоч одне зайняте, фільтр нічого не знаходить, документ не змінюється, а `matchedCount === 0` перетворюється на `409`.
-  Схема «прочитати → перевірити в коді → записати» не годиться: між читанням і записом інший запит міг би зайняти те саме місце.
-  Два одночасні запити на одне місце виконуються послідовно, і другий отримує `409`. Це перевіряє e2e-тест.
-- **Дані належать одному власнику.** Місця й бронювання сеансу не мають сенсу без нього, тож їх вкладено.
-  Фільм і зал спільні для багатьох сеансів, тому на них зберігаються посилання `ObjectId` і розкриваються через `populate`.
-- **Межа застосовності.** Вкладати можна, бо розмір обмежений: місць у залі кілька сотень, а бронювань на сеанс не більше, ніж місць.
-  Документ не росте безмежно і лишається далеко від ліміту MongoDB в 16 МБ.
-  Якби бронювання накопичувалися роками без обмеження, вкладення не підійшло б.
-- **Джерело істини про зайнятість — `seats`.** `bookings[].seats` дублює місця, щоб віддати бронювання без перебору всіх місць.
-  Скасування одним оновленням повертає `null` у відповідні елементи `seats` (`$set` з `arrayFilters`) і прибирає запис (`$pull`).
+- **Бронювання — одним оновленням документа сеансу.** `createBooking` робить один `updateOne`. Умова вимагає, щоб **кожне** місце було вільним
+  (`$elemMatch` з `bookingId: null` на кожне місце). Оновлення ставить `bookingId` через `arrayFilters` і додає запис через `$push`.
+  Якщо хоч одне місце зайняте, документ не змінюється, а `matchedCount === 0` перетворюється на `CONFLICT`.
+  Оновлення одного документа в MongoDB неподільне, тож транзакція не потрібна. Два одночасні запити на одне місце виконуються послідовно,
+  і другий отримує `CONFLICT`. Це перевіряє e2e-тест.
+- **Межі залу — до оновлення.** Фільтр оновлення не відрізнив би неіснуюче місце від зайнятого, і місце поза залом дало б `CONFLICT` замість `BAD_USER_INPUT`.
+- **Скасування** (`cancelBooking`). Id бронювання не містить посилання на сеанс, тому сеанс шукається за вкладеним елементом (`'bookings._id'`, є індекс).
+  Одне оновлення звільняє місця (`$set` з `arrayFilters`) і прибирає запис (`$pull`).
+- **Межа застосовності.** Місць у залі кілька сотень, а бронювань на сеанс не більше, ніж місць, тож документ лишається далеко від ліміту MongoDB в 16 МБ.
 
 ## Перевірка
 
-- `requests.http` у корені містить запити до кожного маршруту в порядку фільм → зал → сеанс → бронювання і запит на кожну помилку.
-  Виконуйте їх по черзі згори вниз у VS Code з розширенням [REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client).
-  Ідентифікатори підставляються зі змінних, тобто з відповідей попередніх запитів. Файл можна проганяти повторно.
-- `npm test` — unit-тести (моделі замінені моками).
-- `npm run test:e2e` — e2e-тести всього HTTP-циклу на окремій базі `<база з MONGODB_URI>_test`. Потрібен запущений `docker compose`.
+- GraphiQL на `http://localhost:3000/graphql` або будь-який GraphQL-клієнт (Apollo Sandbox, Postman, Insomnia).
+- `npm test` — unit-тести сервісів (моделі замінені моками).
+- `npm run test:e2e` — e2e-тести всіх запитів і мутацій через `POST /graphql` на окремій базі `<база з MONGODB_URI>_test`
+  (підміну робить `test/setup-e2e.ts` до імпорту `AppModule`, а тест зупиняється, якщо підключився не до `*_test`).
+  Вони перевіряють коди помилок, пагінацію, атомарність бронювання, кількість запитів до бази (N+1) і приховування деталей помилок БД.
+  Потрібен запущений `docker compose`.
+- `npm run lint` — oxlint.
 
 ## Структура
 
 ```
 src/
-├── films/        фільми
-├── halls/        зали й обчислення переліку місць
-├── showings/     сеанси, розклад з фільтрами й пагінацією
-├── bookings/     бронювання (одним оновленням документа сеансу) й зайнятість місць
-├── common/       фільтр винятків, ParseObjectIdPipe, Swagger-декоратор параметра id
+├── films/        фільми: схема = GraphQL-тип, input-типи, сервіс, FilmsResolver
+├── halls/        зали й обчислення переліку місць, HallsResolver
+├── showings/     сеанси: ShowingsArgs, ShowingPage, ShowingsResolver (film/hall — @ResolveField), SeatsResolver (isBooked)
+├── bookings/     бронювання одним оновленням документа сеансу; BookingsResolver, ShowingBookingsResolver (Showing.bookings)
+├── common/       GraphqlExceptionFilter, formatError, ParseObjectIdPipe
 ├── config/       валідація змінних оточення
+├── schema.gql    згенерована схема GraphQL
 └── seed.ts       засівання БД
 ```
 
-- Кожен модуль має контролер (HTTP), сервіс (логіка) і схеми Mongoose у власній `schemas/`
-  (`@Schema` + `@Prop`, `SchemaFactory.createForClass`).
-  Вкладені документи описані окремими класами зі своїми схемами: `Seat` (у `showing.schema.ts`), `Booking` і `BookedSeat` (у `booking.schema.ts`).
-- Моделі реєструються в кожному feature-модулі через `MongooseModule.forFeature` і впроваджуються `@InjectModel`.
-  `BookingsModule` реєструє модель `Showing`, бо бронювання лежать у документах сеансів.
-  Сервіси працюють лише через моделі, без прямих звернень до драйвера MongoDB.
-- Доступ до сеансів для інших модулів винесено в окремий сервісний модуль без контролера — `ShowingsCoreModule`
-  (`showings/core.module.ts`). Його імпортують `showings`, `bookings`, а також `films` і `halls`, яким треба знати,
-  чи є сеанси, щоб відповісти `409` при видаленні. Так зустрічної залежності `films ↔ showings` немає, і `forwardRef` не потрібен.
+- Кожен домен — окремий модуль. Резолвери зареєстровані **провайдерами своїх модулів** поруч із сервісами.
+  Резолвер приймає операцію й викликає сервіс, бізнес-логіка лишилася в сервісах.
+- Доступ до сеансів для інших модулів винесено в сервісний модуль без резолверів — `ShowingsCoreModule`.
+  Його імпортують `films` і `halls` (перевірка сеансів перед видаленням) і `bookings`. Так зустрічної залежності `films ↔ showings` немає.
 - Підключення до БД — `MongooseModule.forRootAsync` з рядком із `ConfigService` (не `process.env`).
-- Розподіл перевірок:
-  - DTO (class-validator) перевіряють **форму** даних: типи, межі чисел, формат `filmId`/`hallId` (`@IsMongoId`), повтори місць у масиві;
-  - `ParseObjectIdPipe` перевіряє формат `:id` **до звернення до бази**;
-  - сервіси перевіряють **доменні правила**, що залежать від стану бази: існування записів, межі залу, сеанси перед видаленням;
-  - схеми Mongoose дають обов'язковість полів і унікальний індекс на назві залу.
-- Відповіді будують класи DTO (`FilmDto`, `HallDto`, `ShowingDto`, `ShowingView`, `BookingView`) зі статичним `fromDocument`.
-  Вони перетворюють `_id` на рядкове `id` і не пропускають у тіло `__v`, `seats` і `bookings`.
-- Глобальні складові зареєстровані провайдерами в `AppModule`, тож тести отримують їх разом із модулем:
-  - `APP_PIPE` — `ValidationPipe` з `whitelist: true`: поля поза DTO до сервісу не потрапляють;
-  - `APP_FILTER` — `HttpExceptionFilter`: єдиний формат помилки (статус, час, шлях, повідомлення).
-- Сервіси пишуть попередження через вбудований `Logger` (не знайдено, конфлікт), фільтр — підсумок `METHOD url -> status`.
-
-## Маршрути
-
-| Метод | Шлях | Опис |
-|---|---|---|
-| `POST` | `/films` | Створити фільм |
-| `GET` | `/films` | Усі фільми |
-| `GET` | `/films/:id` | Один фільм |
-| `PATCH` | `/films/:id` | Оновити фільм |
-| `DELETE` | `/films/:id` | Видалити фільм (`409`, якщо є сеанси) |
-| `POST` | `/halls` | Створити зал (назва унікальна, без урахування регістру) |
-| `GET` | `/halls` | Усі зали |
-| `GET` | `/halls/:id` | Зал із переліком місць |
-| `DELETE` | `/halls/:id` | Видалити зал (`409`, якщо є сеанси) |
-| `POST` | `/showings` | Створити сеанс (місця залу заповнюються в документ) |
-| `GET` | `/showings?filmId=&date=YYYY-MM-DD&page=1&limit=20&sort=asc` | Сторінка розкладу з фільтрами: `{ items, total, page, limit }` |
-| `GET` | `/showings/:id` | Один сеанс |
-| `GET` | `/showings/:id/seats` | Місця залу з ознакою `isBooked` |
-| `POST` | `/showings/:id/bookings` | Забронювати місця |
-| `GET` | `/showings/:id/bookings` | Бронювання сеансу |
-| `GET` | `/bookings` | Усі бронювання, зібрані з усіх сеансів |
-| `DELETE` | `/bookings/:id` | Скасувати бронювання (місця звільняються тим самим оновленням) |
-
-### Домовленості
-
-- **Ідентифікатори** — `ObjectId`, тобто рядок із 24 шістнадцяткових символів. У відповідях `id` — рядок, `_id` у тіло не потрапляє.
-  Рядок іншого формату в `:id` чи `filmId` дає `400` з поясненням формату ще до звернення до бази.
-  Коректний за формою, але неіснуючий id дає `404`.
-- **Ціни** — цілі числа в копійках (`12500` = 125 грн).
-- **Час** сеансу віддається в UTC (ISO 8601). Фільтр `date` відбирає сеанси, що починаються протягом цієї доби **за UTC**.
-- **Пагінація** `GET /showings`: `page` — ціле ≥ 1 (за замовчуванням `1`), `limit` — ціле 1–100 (`20`),
-  `sort` — `asc` | `desc` (`asc`) за часом початку; при однаковому часі — за `_id`.
-  Фільтр, сортування й сторінка виконуються запитом до бази (`find(filter).sort({ startsAt, _id }).skip().limit()`),
-  `total` рахує `countDocuments(filter)`. Назви фільму й залу підставляє `populate`.
-- `seats` і `bookings` не потрапляють у відповіді `POST /showings`, `GET /showings` і `GET /showings/:id`.
-  Їх навіть не читають із бази (projection `-seats -bookings`).
-- **Бронювання**: межі залу перевіряються до оновлення. Інакше фільтр не відрізнив би неіснуюче місце від зайнятого,
-  і місце поза залом дало б `409` замість `400`. Повтор місця в масиві відхиляє DTO, бо фільтр із двома однаковими умовами
-  задовольнило б одне вільне місце. Зайняте місце дає `409`, і жодне місце зі списку при цьому не бронюється.
-- **Помилки** мають єдиний формат:
-
-  ```json
-  {
-    "statusCode": 400,
-    "timestamp": "2026-11-20T18:30:00.000Z",
-    "path": "/films/abc",
-    "message": "Ідентифікатор abc має неправильний формат: очікується ObjectId — рядок із 24 шістнадцяткових символів (0-9, a-f)"
-  }
-  ```
-
-  Для помилок валідації `message` — масив повідомлень.
+- Сервіси пишуть попередження через вбудований `Logger` (не знайдено, конфлікт), фільтр — підсумок `поле -> код`.

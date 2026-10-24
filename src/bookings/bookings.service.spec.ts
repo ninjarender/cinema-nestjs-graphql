@@ -47,7 +47,7 @@ describe('BookingsService', () => {
       { row: 1, seat: 2 },
       { row: 1, seat: 1 },
     ];
-    const booking = await service.create(showingId.toString(), { seats });
+    const booking = await service.create(showingId.toString(), seats);
 
     expect(showingModel.updateOne).toHaveBeenCalledTimes(1);
     const [filter, update, options] = showingModel.updateOne.mock.calls[0];
@@ -72,8 +72,8 @@ describe('BookingsService', () => {
       ],
     });
     expect(booking).toMatchObject({
-      id: bookingId.toString(),
-      showingId: showingId.toString(),
+      _id: bookingId,
+      showingId,
       totalPrice: 25000,
       seats: [
         { row: 1, seat: 1 },
@@ -82,7 +82,7 @@ describe('BookingsService', () => {
     });
   });
 
-  it('matchedCount === 0 → 409 з переліком зайнятих місць', async () => {
+  it('matchedCount === 0 → CONFLICT з переліком зайнятих місць', async () => {
     showingModel.updateOne.mockResolvedValue({
       matchedCount: 0,
       modifiedCount: 0,
@@ -95,12 +95,10 @@ describe('BookingsService', () => {
     });
 
     const error = await service
-      .create(showingId.toString(), {
-        seats: [
-          { row: 2, seat: 1 },
-          { row: 1, seat: 5 },
-        ],
-      })
+      .create(showingId.toString(), [
+        { row: 2, seat: 1 },
+        { row: 1, seat: 5 },
+      ])
       .catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(ConflictException);
@@ -116,22 +114,22 @@ describe('BookingsService', () => {
     });
 
     await expect(
-      service.create(showingId.toString(), { seats: [{ row: 1, seat: 1 }] }),
+      service.create(showingId.toString(), [{ row: 1, seat: 1 }]),
     ).resolves.toMatchObject({ totalPrice: 12500 });
   });
 
   it('відхиляє місце поза межами залу ДО оновлення', async () => {
     await expect(
-      service.create(showingId.toString(), { seats: [{ row: 4, seat: 1 }] }),
+      service.create(showingId.toString(), [{ row: 4, seat: 1 }]),
     ).rejects.toThrow(BadRequestException);
     expect(showingModel.updateOne).not.toHaveBeenCalled();
   });
 
-  it('передає далі 404, якщо сеансу немає', async () => {
+  it('передає далі NOT_FOUND, якщо сеансу немає', async () => {
     showingsCore.findOne.mockRejectedValue(new NotFoundException());
 
     await expect(
-      service.create(showingId.toString(), { seats: [{ row: 1, seat: 1 }] }),
+      service.create(showingId.toString(), [{ row: 1, seat: 1 }]),
     ).rejects.toThrow(NotFoundException);
     expect(showingModel.updateOne).not.toHaveBeenCalled();
   });
@@ -151,7 +149,7 @@ describe('BookingsService', () => {
     );
   });
 
-  it('повертає 404 на скасування неіснуючого бронювання', async () => {
+  it('повертає NOT_FOUND на скасування неіснуючого бронювання', async () => {
     showingModel.updateOne.mockResolvedValue({
       matchedCount: 0,
       modifiedCount: 0,

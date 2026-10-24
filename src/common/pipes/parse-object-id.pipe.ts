@@ -6,7 +6,7 @@ export const OBJECT_ID_FORMAT =
 
 /**
  * Перевіряє формат ObjectId ще до звернення до бази:
- * без нього Mongoose кинув би CastError, і клієнт отримав би 500 замість 400.
+ * без нього Mongoose кинув би CastError, і клієнт отримав би INTERNAL_SERVER_ERROR замість BAD_USER_INPUT.
  */
 @Injectable()
 export class ParseObjectIdPipe implements PipeTransform<string, string> {

@@ -8,9 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { isDuplicateKeyError } from '../common/database-errors.js';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
-import { CreateHallDto } from './dto/create-hall.dto.js';
-import { HallWithSeats } from './dto/hall-with-seats.dto.js';
-import { HallDto } from './dto/hall.dto.js';
+import { CreateHallInput } from './dto/create-hall.input.js';
 import { CASE_INSENSITIVE, Hall, HallDocument } from './schemas/hall.schema.js';
 
 @Injectable()
@@ -23,42 +21,33 @@ export class HallsService {
     private readonly showingsCore: ShowingsCoreService,
   ) {}
 
-  async create(dto: CreateHallDto): Promise<HallDto> {
-    // Та сама колація, що в унікальному індексі: зрозуміле 409 без спроби запису
+  async create(input: CreateHallInput): Promise<HallDocument> {
+    // Та сама колація, що в унікальному індексі: зрозумілий CONFLICT без спроби запису
     const nameTaken = await this.hallModel
-      .exists({ name: dto.name })
+      .exists({ name: input.name })
       .collation(CASE_INSENSITIVE);
     if (nameTaken !== null) {
-      throw this.nameConflict(dto.name);
+      throw this.nameConflict(input.name);
     }
 
     try {
-      return HallDto.fromDocument(await this.hallModel.create(dto));
+      return await this.hallModel.create(input);
     } catch (error) {
       // Два одночасні запити з тією самою назвою (у будь-якому регістрі): другий відхилить unique-індекс
       if (isDuplicateKeyError(error)) {
-        throw this.nameConflict(dto.name);
+        throw this.nameConflict(input.name);
       }
       throw error;
     }
   }
 
-  async findAll(): Promise<HallDto[]> {
-    const halls = await this.hallModel.find().sort({ _id: 1 });
-    return halls.map((hall) => HallDto.fromDocument(hall));
+  async findAll(): Promise<HallDocument[]> {
+    return this.hallModel.find().sort({ _id: 1 });
   }
 
-  /** Те саме, що findOneWithSeats, але без винятку — для перевірок в інших модулях. */
+  /** Зал або null: query hall повертає null для неіснуючого id, а не помилку. */
   async findById(id: string): Promise<HallDocument | null> {
     return this.hallModel.findById(id);
-  }
-
-  async findOneWithSeats(id: string): Promise<HallWithSeats> {
-    const hall = await this.findById(id);
-    if (hall === null) {
-      throw this.notFound(id);
-    }
-    return HallWithSeats.fromDocument(hall);
   }
 
   async remove(id: string): Promise<void> {

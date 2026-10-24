@@ -2,8 +2,9 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ShowingsCoreModule } from '../showings/core.module.js';
 import { Showing, ShowingSchema } from '../showings/schemas/showing.schema.js';
-import { BookingsController } from './bookings.controller.js';
+import { BookingsResolver } from './bookings.resolver.js';
 import { BookingsService } from './bookings.service.js';
+import { ShowingBookingsResolver } from './showing-bookings.resolver.js';
 
 /**
  * Окремої колекції бронювань немає: вони лежать у документах сеансів,
@@ -14,7 +15,6 @@ import { BookingsService } from './bookings.service.js';
     MongooseModule.forFeature([{ name: Showing.name, schema: ShowingSchema }]),
     ShowingsCoreModule,
   ],
-  controllers: [BookingsController],
-  providers: [BookingsService],
+  providers: [BookingsService, BookingsResolver, ShowingBookingsResolver],
 })
 export class BookingsModule {}

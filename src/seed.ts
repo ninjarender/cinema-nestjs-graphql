@@ -61,7 +61,7 @@ const halls: WithId<Hall>[] = faker.helpers
   }));
 
 // Кожен сеанс — у свою добу; перші сеанси гарантовано покривають усі фільми й зали.
-// Місця розгортаються з розмірів залу, як це робить POST /showings.
+// Місця розгортаються з розмірів залу, як це робить мутація createShowing.
 const showings: WithId<Showing>[] = Array.from(
   { length: SHOWINGS_COUNT },
   (_, i) => {
@@ -82,7 +82,7 @@ const showings: WithId<Showing>[] = Array.from(
   },
 );
 
-// Бронювання вкладаються в документ сеансу так само, як це робить POST /showings/:id/bookings
+// Бронювання вкладаються в документ сеансу так само, як це робить мутація createBooking
 for (let i = 0; i < BOOKINGS_COUNT; i++) {
   const showing = showings[i % showings.length];
   const freeSeats = showing.seats.filter(({ bookingId }) => bookingId === null);

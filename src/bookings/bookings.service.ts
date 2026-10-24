@@ -7,13 +7,15 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { SeatPosition } from '../halls/dto/hall-with-seats.dto.js';
-import { hallHasSeat } from '../halls/hall-seats.js';
+import { hallHasSeat, type SeatPosition } from '../halls/hall-seats.js';
 import { Hall } from '../halls/schemas/hall.schema.js';
-import { Showing } from '../showings/schemas/showing.schema.js';
+import {
+  Showing,
+  type ShowingDocument,
+} from '../showings/schemas/showing.schema.js';
 import { ShowingsCoreService } from '../showings/showings-core.service.js';
-import { BookingView, SeatAvailability } from './dto/booking-view.dto.js';
-import { CreateBookingDto } from './dto/create-booking.dto.js';
+import { SeatInput } from './dto/create-booking.args.js';
+import { BookingView } from './models/booking-view.model.js';
 
 const seatKey = ({ row, seat }: SeatPosition): string => `${row}:${seat}`;
 
@@ -42,21 +44,24 @@ export class BookingsService {
       .sort(
         (a, b) =>
           a.createdAt.getTime() - b.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
+          a._id.toString().localeCompare(b._id.toString()),
       );
   }
 
-  async findByShowing(showingId: string): Promise<BookingView[]> {
-    const showing = await this.showingsCore.findOne(showingId, 'bookings');
+  /** Бронювання вже прочитаного сеансу (поле Showing.bookings) — без звернення до бази. */
+  listForShowing(showing: ShowingDocument): BookingView[] {
     return showing.bookings.map((booking) =>
       BookingView.fromBooking(booking, showing._id),
     );
   }
 
-  async create(showingId: string, dto: CreateBookingDto): Promise<BookingView> {
+  async create(
+    showingId: string,
+    requested: SeatInput[],
+  ): Promise<BookingView> {
     // Існування сеансу й межі залу — ДО оновлення: фільтр оновлення не розрізняє
-    // неіснуюче місце й зайняте, і місце поза залом дало б 409 замість 400.
-    // Повтори місць у масиві відхиляє CreateBookingDto (@ArrayUnique) ще раніше.
+    // неіснуюче місце й зайняте, і місце поза залом дало б CONFLICT замість BAD_USER_INPUT.
+    // Повтори місць у масиві відхиляє CreateBookingArgs (@ArrayUnique) ще раніше.
     const showing = await this.showingsCore
       .findOne(showingId, 'hall price')
       .then((found) =>
@@ -64,14 +69,14 @@ export class BookingsService {
       );
     const { hall } = showing;
 
-    const outsideHall = dto.seats.filter((seat) => !hallHasSeat(hall, seat));
+    const outsideHall = requested.filter((seat) => !hallHasSeat(hall, seat));
     if (outsideHall.length > 0) {
       throw new BadRequestException(
         `У залі "${hall.name}" (${hall.rows} рядів × ${hall.seatsPerRow} місць) немає місць: ${this.formatSeats(outsideHall)}`,
       );
     }
 
-    const seats = dto.seats.map(({ row, seat }) => ({ row, seat }));
+    const seats = requested.map(({ row, seat }) => ({ row, seat }));
     const booking = {
       _id: new Types.ObjectId(), // ДО оновлення: потрібен і в $set, і в $push, і у відповіді
       seats,
@@ -112,15 +117,6 @@ export class BookingsService {
     return BookingView.fromBooking(booking, showing._id);
   }
 
-  async getSeatsForShowing(showingId: string): Promise<SeatAvailability[]> {
-    const showing = await this.showingsCore.findOne(showingId, 'seats');
-    return showing.seats.map(({ row, seat, bookingId }) => ({
-      row,
-      seat,
-      isBooked: bookingId !== null,
-    }));
-  }
-
   async remove(id: string): Promise<void> {
     // Id бронювання не містить посилання на сеанс: шукаємо сеанс за вкладеним елементом.
     // Звільнення місць і видалення запису — одним оновленням.
@@ -140,7 +136,7 @@ export class BookingsService {
   }
 
   /**
-   * 409 зі списком зайнятих місць. Читання тут лише для тексту помилки:
+   * CONFLICT зі списком зайнятих місць. Читання тут лише для тексту помилки:
    * рішення про конфлікт уже ухвалило атомарне оновлення.
    */
   private async seatsTakenConflict(

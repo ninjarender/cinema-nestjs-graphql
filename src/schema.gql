@@ -1,0 +1,164 @@
+# ------------------------------------------------------
+# THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+# ------------------------------------------------------
+
+type BookedSeat {
+  row: Int!
+  seat: Int!
+}
+
+type Booking {
+  createdAt: DateTime!
+  id: ID!
+  seats: [BookedSeat!]!
+
+  """Сеанс, у якому лежить бронювання"""
+  showingId: ID!
+  totalPrice: Int!
+}
+
+input CreateFilmInput {
+  """Тривалість у хвилинах, ціле додатне"""
+  durationMinutes: Int!
+
+  """Від 1888 до 2100"""
+  releaseYear: Int!
+  title: String!
+}
+
+input CreateHallInput {
+  """Унікальна без урахування регістру"""
+  name: String!
+
+  """Від 1 до 100"""
+  rows: Int!
+
+  """Від 1 до 100"""
+  seatsPerRow: Int!
+}
+
+input CreateShowingInput {
+  filmId: ID!
+  hallId: ID!
+
+  """Ціна квитка в копійках, ціле додатне"""
+  price: Int!
+
+  """Дата й час початку в ISO 8601, у майбутньому"""
+  startsAt: DateTime!
+}
+
+"""
+Дата й час у форматі ISO 8601, наприклад 2026-11-20T18:30:00Z; у відповідях — UTC
+"""
+scalar DateTime
+
+type Film {
+  durationMinutes: Int!
+  id: ID!
+  releaseYear: Int!
+  title: String!
+}
+
+type Hall {
+  id: ID!
+  name: String!
+  rows: Int!
+  seatsPerRow: Int!
+}
+
+type Mutation {
+  """Звільняє місця й видаляє запис тим самим оновленням сеансу"""
+  cancelBooking(id: ID!): Boolean!
+
+  """
+  Займає всі місця одним оновленням сеансу; якщо хоч одне зайняте — CONFLICT і не бронюється жодне
+  """
+  createBooking(
+    """Непорожній масив місць без повторів"""
+    seats: [SeatInput!]!
+    showingId: ID!
+  ): Booking!
+  createFilm(input: CreateFilmInput!): Film!
+  createHall(input: CreateHallInput!): Hall!
+  createShowing(input: CreateShowingInput!): Showing!
+  deleteFilm(id: ID!): Boolean!
+  deleteHall(id: ID!): Boolean!
+  updateFilm(id: ID!, input: UpdateFilmInput!): Film!
+}
+
+type Query {
+  """Бронювання, зібрані з усіх сеансів"""
+  bookings: [Booking!]!
+  film(id: ID!): Film
+  films: [Film!]!
+  hall(id: ID!): Hall
+  halls: [Hall!]!
+  showing(id: ID!): Showing
+  showings(
+    """Залишає сеанси, що починаються цієї доби (UTC), формат YYYY-MM-DD"""
+    date: String
+
+    """Залишає сеанси лише цього фільму"""
+    filmId: ID
+
+    """Від 1 до 100"""
+    limit: Int = 20
+    page: Int = 1
+
+    """При рівному часі — за id"""
+    sort: SortOrder = ASC
+  ): ShowingPage!
+}
+
+type Seat {
+  isBooked: Boolean!
+  row: Int!
+  seat: Int!
+}
+
+input SeatInput {
+  """Номер ряду, ціле додатне"""
+  row: Int!
+
+  """Номер місця в ряду, ціле додатне"""
+  seat: Int!
+}
+
+type Showing {
+  bookings: [Booking!]!
+  film: Film!
+  hall: Hall!
+  id: ID!
+
+  """Ціна квитка в копійках"""
+  price: Int!
+
+  """Місця залу зі станом на цьому сеансі"""
+  seats: [Seat!]!
+  startsAt: DateTime!
+}
+
+type ShowingPage {
+  items: [Showing!]!
+  limit: Int!
+  page: Int!
+
+  """Кількість сеансів за фільтрами"""
+  total: Int!
+}
+
+"""Порядок за часом початку сеансу"""
+enum SortOrder {
+  ASC
+  DESC
+}
+
+input UpdateFilmInput {
+  """Тривалість у хвилинах, ціле додатне"""
+  durationMinutes: Int
+
+  """Від 1888 до 2100"""
+  releaseYear: Int
+  title: String
+}

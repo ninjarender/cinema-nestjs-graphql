@@ -6,8 +6,8 @@ import { Showing, ShowingDocument } from './schemas/showing.schema.js';
 /**
  * Доступ до сеансів, потрібний іншим модулям.
  *
- * Його імпортують і модуль сеансів, і модулі фільмів та залів (перевірка перед
- * видаленням), і модуль бронювань. Так зустрічна залежність films ↔ showings
+ * Його імпортують модулі фільмів та залів (перевірка перед видаленням)
+ * і модуль бронювань. Так зустрічна залежність films ↔ showings
  * не виникає: спільна частина винесена в окремий сервісний модуль (тема 4).
  */
 @Injectable()
@@ -19,7 +19,7 @@ export class ShowingsCoreService {
     private readonly showingModel: Model<Showing>,
   ) {}
 
-  /** Сеанс лише з потрібними полями (projection) або 404. */
+  /** Сеанс лише з потрібними полями (projection) або NOT_FOUND. */
   async findOne(id: string, projection: string): Promise<ShowingDocument> {
     const showing = await this.showingModel.findById(id, projection);
     if (showing === null) {

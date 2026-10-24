@@ -52,7 +52,7 @@ describe('FilmsService', () => {
     });
   });
 
-  it('повертає 409 і не видаляє, якщо на фільм посилається сеанс', async () => {
+  it('повертає CONFLICT і не видаляє, якщо на фільм посилається сеанс', async () => {
     showingsCore.hasShowingsForFilm.mockResolvedValue(true);
 
     await expect(service.remove(filmId.toString())).rejects.toThrow(
@@ -70,7 +70,7 @@ describe('FilmsService', () => {
     expect(showingsCore.hasShowingsForFilm).not.toHaveBeenCalled();
   });
 
-  it('оновлює з валідаторами схеми й віддає рядковий id без службових полів', async () => {
+  it('оновлює з валідаторами схеми й повертає оновлений документ', async () => {
     filmModel.findByIdAndUpdate.mockResolvedValue({ ...film, title: 'Нова' });
 
     const updated = await service.update(filmId.toString(), { title: 'Нова' });
@@ -80,15 +80,10 @@ describe('FilmsService', () => {
       { title: 'Нова' },
       { returnDocument: 'after', runValidators: true },
     );
-    expect(updated).toEqual({
-      id: filmId.toString(),
-      title: 'Нова',
-      durationMinutes: 75,
-      releaseYear: 1930,
-    });
+    expect(updated).toEqual({ ...film, title: 'Нова' });
   });
 
-  it('повертає 404 на оновлення неіснуючого фільму', async () => {
+  it('повертає NOT_FOUND на оновлення неіснуючого фільму', async () => {
     filmModel.findByIdAndUpdate.mockResolvedValue(null);
 
     await expect(

@@ -1,4 +1,8 @@
-import type { SeatPosition } from './dto/hall-with-seats.dto.js';
+/** Координати місця в залі. */
+export interface SeatPosition {
+  row: number;
+  seat: number;
+}
 
 interface HallSize {
   rows: number;

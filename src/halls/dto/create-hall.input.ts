@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { Field, InputType, Int } from '@nestjs/graphql';
 import { Transform } from 'class-transformer';
 import {
   IsInt,
@@ -9,23 +9,24 @@ import {
   MaxLength,
 } from 'class-validator';
 
-export class CreateHallDto {
-  @ApiProperty({ example: 'Зал 1' })
+@InputType()
+export class CreateHallInput {
+  @Field({ description: 'Унікальна без урахування регістру' })
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim() : value,
   )
   @IsString()
   @IsNotEmpty()
-  @MaxLength(100) // дублює maxlength схеми → 400, а не ValidationError Mongoose
+  @MaxLength(100) // дублює maxlength схеми → BAD_USER_INPUT, а не ValidationError Mongoose
   name: string;
 
-  @ApiProperty({ example: 3, minimum: 1, maximum: 100 })
+  @Field(() => Int, { description: 'Від 1 до 100' })
   @IsInt()
   @IsPositive()
   @Max(100)
   rows: number;
 
-  @ApiProperty({ example: 5, minimum: 1, maximum: 100 })
+  @Field(() => Int, { description: 'Від 1 до 100' })
   @IsInt()
   @IsPositive()
   @Max(100)
